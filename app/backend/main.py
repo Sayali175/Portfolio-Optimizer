@@ -127,6 +127,7 @@ def calculate_sharpe_ratio(portfolio_values):
         * np.sqrt(252)
     )
 
+    # Convert NumPy value to normal Python float
     return float(sharpe_ratio)
 
 
@@ -154,6 +155,7 @@ def calculate_max_drawdown(portfolio_values):
 
     max_drawdown = np.min(drawdowns)
 
+    # Convert NumPy value to normal Python float
     return float(max_drawdown)
 
 
@@ -203,7 +205,7 @@ def run_simulation(request: SimulationRequest):
     # -----------------------------------------------------
 
     portfolio_values = [
-        environment.portfolio_value
+        float(environment.portfolio_value)
     ]
 
     rewards = []
@@ -299,50 +301,75 @@ def run_simulation(request: SimulationRequest):
     )
 
     # -----------------------------------------------------
+    # CALCULATE FINAL VALUES
+    # -----------------------------------------------------
+
+    final_portfolio_value = float(
+        environment.portfolio_value
+    )
+
+    total_return = (
+        final_portfolio_value
+        / float(request.initial_balance)
+        - 1
+    )
+
+    # Explicit conversion to Python float
+    total_return = float(total_return)
+
+    # -----------------------------------------------------
     # FINAL RESPONSE
     # -----------------------------------------------------
 
     result = {
 
-        "risk_profile": request.risk_profile,
+        "risk_profile": float(
+            request.risk_profile
+        ),
 
-        "initial_balance": request.initial_balance,
+        "initial_balance": float(
+            request.initial_balance
+        ),
 
         "final_portfolio_value": round(
-            float(environment.portfolio_value),
+            final_portfolio_value,
             2
         ),
 
         "total_return": round(
-            (
-                environment.portfolio_value
-                / request.initial_balance
-                - 1
-            ),
+            total_return,
             6
         ),
 
         "target_weights": allocation,
 
         "sharpe_ratio": round(
-            sharpe_ratio,
+            float(sharpe_ratio),
             4
         ),
 
         "max_drawdown": round(
-            max_drawdown,
+            float(max_drawdown),
             4
         ),
 
-        "steps": step_count,
+        "steps": int(
+            step_count
+        ),
 
         "portfolio_values": [
-            round(float(value), 2)
+            round(
+                float(value),
+                2
+            )
             for value in portfolio_values
         ],
 
         "rewards": [
-            round(float(reward), 6)
+            round(
+                float(reward),
+                6
+            )
             for reward in rewards
         ],
     }

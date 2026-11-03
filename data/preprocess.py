@@ -1,3 +1,4 @@
+
 import os
 import numpy as np
 import pandas as pd
@@ -9,80 +10,122 @@ os.makedirs(PROCESSED_DATA_DIR, exist_ok=True)
 
 MF_PATH = os.path.join(RAW_DATA_DIR, "mf_nav_raw.csv")
 NIFTY_PATH = os.path.join(RAW_DATA_DIR, "nifty_raw.csv")
-OUTPUT_PATH = os.path.join(PROCESSED_DATA_DIR, "processed_market_data.parquet")
+OUTPUT_PATH = os.path.join(
+    PROCESSED_DATA_DIR, "processed_market_data_v2.parquet"
+)
+
+ASSETS = ["equity", "debt", "hybrid", "liquid"]
+
 
 def load_and_align_datasets():
-    """Load raw CSVs, align dates, and forward-fill non-trading day gaps."""
     if not os.path.exists(MF_PATH) or not os.path.exists(NIFTY_PATH):
-        raise FileNotFoundError("Raw data files not found in data/raw/. Run fetch_data.py first.")
+        raise FileNotFoundError(
+            "Raw CSV files missing. Run data/fetch_data.py first."
+        )
 
-    # Load data with DatetimeIndex
     df_mf = pd.read_csv(MF_PATH, index_col=0, parse_dates=True)
     df_nifty = pd.read_csv(NIFTY_PATH, index_col=0, parse_dates=True)
 
-    # Inner/Outer merge based on date
-    df_combined = pd.merge(df_mf, df_nifty, left_index=True, right_index=True, how="outer")
+    df_combined = pd.merge(
+        df_mf,
+        df_nifty,
+        left_index=True,
+        right_index=True,
+        how="outer",
+    )
 
-    # Resample to NSE Trading Business Days (drop non-trading weekends/holidays)
-    # Forward-fill missing values (e.g. if a fund NAV update was delayed by 1 day)
-    df_aligned = df_combined.sort_index().ffill().bfill()
+    df_combined = df_combined.sort_index()
 
-    # Drop any remaining non-trading days where Nifty has no volume/close
-    df_aligned = df_aligned[df_aligned["nifty_close"].notna()]
+    if df_combined.index.has_duplicates:
+        raise ValueError("Duplicate dates found in market data.")
+
+    required = [f"{asset}_nav" for asset in ASSETS] + ["nifty_close"]
+
+    for column in required:
+        if column not in df_combined.columns:
+            raise ValueError(f"Missing required column: {column}")
+
+        df_combined[column] = pd.to_numeric(
+            df_combined[column], errors="coerce"
+        )
+
+    # Forward-fill only: never use future values to fill past dates.
+    df_aligned = df_combined[required].ffill()
+
+    # Remove dates before all required prices become available.
+    df_aligned = df_aligned.dropna(subset=required)
+
+    if not np.isfinite(df_aligned[required].to_numpy()).all():
+        raise ValueError("Non-finite market prices detected.")
+
+    if (df_aligned[required] <= 0).any().any():
+        raise ValueError("Market prices must be positive.")
 
     return df_aligned
 
-def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Calculate daily returns, rolling volatilities, and technical indicators."""
+
+def engineer_features(df: pd.DataFrame):
     data = df.copy()
 
-    asset_classes = ["equity", "debt", "hybrid", "liquid"]
-
-    # 1. Compute Daily Log Returns for each fund class
-    for asset in asset_classes:
+    # Simple daily returns, compatible with portfolio_value * (1 + return)
+    for asset in ASSETS:
         nav_col = f"{asset}_nav"
         ret_col = f"{asset}_return"
-        data[ret_col] = np.log(data[nav_col] / data[nav_col].shift(1))
 
-        # 30-day and 90-day annualized rolling volatility (252 trading days)
-        data[f"{asset}_vol_30d"] = data[ret_col].rolling(window=30).std() * np.sqrt(252)
-        data[f"{asset}_vol_90d"] = data[ret_col].rolling(window=90).std() * np.sqrt(252)
+        data[ret_col] = data[nav_col].pct_change(fill_method=None)
 
-    # 2. Compute Benchmark (NIFTY 50) Indicators
-    data["nifty_return"] = np.log(data["nifty_close"] / data["nifty_close"].shift(1))
-    data["nifty_vol_30d"] = data["nifty_return"].rolling(window=30).std() * np.sqrt(252)
+        data[f"{asset}_vol_30d"] = (
+            data[ret_col].rolling(30).std() * np.sqrt(252)
+        )
+        data[f"{asset}_vol_90d"] = (
+            data[ret_col].rolling(90).std() * np.sqrt(252)
+        )
 
-    # Momentum / Trend: RSI (14 days)
-    data["nifty_rsi_14"] = ta.momentum.rsi(data["nifty_close"], window=14) / 100.0  # Normalize to [0, 1]
+    data["nifty_return"] = data["nifty_close"].pct_change(
+        fill_method=None
+    )
 
-    # Moving Average Ratios (SMA 20 vs SMA 50)
+    data["nifty_vol_30d"] = (
+        data["nifty_return"].rolling(30).std() * np.sqrt(252)
+    )
+
+    data["nifty_rsi_14"] = (
+        ta.momentum.rsi(data["nifty_close"], window=14) / 100.0
+    )
+
     sma_20 = ta.trend.sma_indicator(data["nifty_close"], window=20)
     sma_50 = ta.trend.sma_indicator(data["nifty_close"], window=50)
-    data["nifty_sma_ratio"] = (sma_20 / sma_50) - 1.0  # Percentage spread
 
-    # MACD normalized
+    data["nifty_sma_ratio"] = (sma_20 / sma_50) - 1.0
+
     macd = ta.trend.MACD(data["nifty_close"])
-    data["nifty_macd_diff"] = macd.macd_diff() / data["nifty_close"]
+    data["nifty_macd_diff"] = (
+        macd.macd_diff() / data["nifty_close"]
+    )
 
-    # Drop initial rolling window warmup NaNs
-    data = data.dropna().copy()
+    data = data.replace([np.inf, -np.inf], np.nan).dropna().copy()
+
+    if len(data) < 2:
+        raise ValueError("Not enough valid rows after preprocessing.")
+
     return data
 
+
 def main():
-    print("Aligning datasets...")
+    print("Loading and aligning market data...")
     aligned_df = load_and_align_datasets()
-    print(f"Total raw aligned rows: {len(aligned_df)}")
 
-    print("Computing rolling financial indicators & features...")
+    print("Generating financial features...")
     processed_df = engineer_features(aligned_df)
-    print(f"Total processed rows (post-warmup): {len(processed_df)}")
 
-    # Save to Parquet for fast I/O during RL training
+    print(f"Processed rows: {len(processed_df)}")
+    print(f"Features generated: {len(processed_df.columns)}")
+
     processed_df.to_parquet(OUTPUT_PATH, engine="pyarrow")
-    print(f"Saved preprocessed dataset to: {OUTPUT_PATH}")
-    print("\nFeature Columns Generated:")
-    for col in processed_df.columns:
-        print(f" - {col}")
+
+    print(f"Saved dataset to: {OUTPUT_PATH}")
+    print("Preprocessing completed successfully!")
+
 
 if __name__ == "__main__":
     main()

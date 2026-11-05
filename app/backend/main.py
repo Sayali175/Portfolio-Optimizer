@@ -1,11 +1,14 @@
-"""
-Portfolio Optimizer FastAPI Backend
 
-Phase 2:
-- Load trained PPO model once at startup
-- Run portfolio simulations through PortfolioEnv
-- Expose POST /simulate
-- Calculate Sharpe Ratio and Maximum Drawdown
+"""
+Portfolio Optimizer FastAPI Backend — PPO V2
+
+Features:
+- Loads trained PPO V2 model once
+- Uses PortfolioEnvV2
+- Runs simulations on reserved test data
+- Supports different investor risk profiles
+- Returns portfolio performance and allocation
+- Includes estimated taxes and transaction fees
 """
 
 import sys
@@ -14,6 +17,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -28,45 +32,53 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from RL.env import PortfolioEnv
+from RL.env_v2 import PortfolioEnvV2
 
 
 MODEL_PATH = (
     PROJECT_ROOT
     / "RL"
     / "models"
-    / "ppo_portfolio_model.zip"
+    / "ppo_portfolio_model_v2.zip"
 )
 
 DATA_PATH = (
     PROJECT_ROOT
     / "data"
     / "processed"
-    / "processed_market_data.parquet"
+    / "processed_market_data_v2.parquet"
 )
 
 
 # ---------------------------------------------------------
-# LOAD MODEL ONCE
+# LOAD PPO V2 MODEL
 # ---------------------------------------------------------
 
-print("Loading PPO model...")
+print("Loading PPO V2 model...")
 
 model = PPO.load(
     str(MODEL_PATH),
     device="cpu"
 )
 
-print("PPO model loaded successfully.")
+print("PPO V2 model loaded successfully.")
 
 
 # ---------------------------------------------------------
 # LOAD MARKET DATA
 # ---------------------------------------------------------
 
-market_data = pd.read_parquet(DATA_PATH)
+full_market_data = pd.read_parquet(DATA_PATH).sort_index()
 
-print(f"Market data loaded: {len(market_data)} rows")
+train_size = int(len(full_market_data) * 0.8)
+
+market_data = (
+    full_market_data.iloc[train_size:]
+    .copy()
+)
+
+print("Total market rows:", len(full_market_data))
+print("Reserved test rows:", len(market_data))
 
 
 # ---------------------------------------------------------
@@ -75,9 +87,10 @@ print(f"Market data loaded: {len(market_data)} rows")
 
 app = FastAPI(
     title="Portfolio Optimizer API",
-    description="AI-powered portfolio optimization backend",
-    version="2.0.0",
+    description="AI-powered tax-aware portfolio optimization",
+    version="2.1.0",
 )
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -99,120 +112,77 @@ class SimulationRequest(BaseModel):
         default=0.5,
         ge=0.0,
         le=1.0,
-        description="Risk profile from 0 (low risk) to 1 (high risk)",
     )
 
     initial_balance: float = Field(
         default=100000.0,
         gt=0,
-        description="Starting portfolio value",
     )
 
 
 # ---------------------------------------------------------
-# SHARPE RATIO
+# PERFORMANCE METRICS
 # ---------------------------------------------------------
 
 def calculate_sharpe_ratio(portfolio_values):
 
-    portfolio_values = np.array(
-        portfolio_values,
-        dtype=float
-    )
+    values = np.asarray(portfolio_values, dtype=float)
 
-    if len(portfolio_values) < 2:
+    if len(values) < 2:
         return 0.0
 
-    returns = (
-        np.diff(portfolio_values)
-        / portfolio_values[:-1]
-    )
+    returns = np.diff(values) / values[:-1]
 
-    if np.std(returns) == 0:
+    volatility = np.std(returns)
+
+    if volatility < 1e-12:
         return 0.0
 
-    sharpe_ratio = (
-        np.mean(returns)
-        / np.std(returns)
+    # Match evaluation_v2.py:
+    # 5% assumed annual risk-free rate.
+    risk_free_daily = 0.05 / 252
+
+    sharpe = (
+        np.mean(returns - risk_free_daily)
+        / volatility
         * np.sqrt(252)
     )
 
-    # Convert NumPy value to normal Python float
-    return float(sharpe_ratio)
+    return float(sharpe)
 
-
-# ---------------------------------------------------------
-# MAXIMUM DRAWDOWN
-# ---------------------------------------------------------
 
 def calculate_max_drawdown(portfolio_values):
 
-    portfolio_values = np.array(
-        portfolio_values,
-        dtype=float
-    )
+    values = np.asarray(portfolio_values, dtype=float)
 
-    if len(portfolio_values) == 0:
+    if len(values) < 2:
         return 0.0
 
-    running_max = np.maximum.accumulate(
-        portfolio_values
-    )
+    peaks = np.maximum.accumulate(values)
 
-    drawdowns = (
-        portfolio_values - running_max
-    ) / running_max
+    drawdowns = values / peaks - 1.0
 
-    max_drawdown = np.min(drawdowns)
-
-    # Convert NumPy value to normal Python float
-    return float(max_drawdown)
+    return float(np.min(drawdowns))
 
 
 # ---------------------------------------------------------
-# SIMULATION FUNCTION
+# SIMULATION
 # ---------------------------------------------------------
 
 def run_simulation(request: SimulationRequest):
 
-    print("\n===== SIMULATION STARTED =====")
+    print("\n===== PPO V2 SIMULATION STARTED =====")
+
     print("Risk profile:", request.risk_profile)
     print("Initial balance:", request.initial_balance)
 
-    # -----------------------------------------------------
-    # CREATE ENVIRONMENT
-    # -----------------------------------------------------
-
-    print("Creating PortfolioEnv...")
-
-    environment = PortfolioEnv(
+    environment = PortfolioEnvV2(
         df=market_data.copy(),
         risk_profile=request.risk_profile,
         initial_balance=request.initial_balance,
     )
 
-    print("PortfolioEnv created successfully.")
-
-    # -----------------------------------------------------
-    # RESET ENVIRONMENT
-    # -----------------------------------------------------
-
-    print("Resetting environment...")
-
     observation, _ = environment.reset()
-
-    print(
-        "Environment reset successfully."
-    )
-
-    print(
-        "Observation shape:",
-        observation.shape
-    )
-
-    # -----------------------------------------------------
-    # INITIAL PORTFOLIO VALUE
-    # -----------------------------------------------------
 
     portfolio_values = [
         float(environment.portfolio_value)
@@ -222,18 +192,11 @@ def run_simulation(request: SimulationRequest):
 
     step_count = 0
 
-    # -----------------------------------------------------
-    # RUN PPO THROUGH ENVIRONMENT
-    # -----------------------------------------------------
-
-    print("Starting PPO simulation...")
-
     while True:
 
-        # Get action from trained PPO model
-        action, _state = model.predict(
+        action, _ = model.predict(
             observation,
-            deterministic=True
+            deterministic=True,
         )
 
         (
@@ -241,12 +204,10 @@ def run_simulation(request: SimulationRequest):
             reward,
             terminated,
             truncated,
-            _info,
+            _,
         ) = environment.step(action)
 
-        rewards.append(
-            float(reward)
-        )
+        rewards.append(float(reward))
 
         portfolio_values.append(
             float(environment.portfolio_value)
@@ -254,43 +215,34 @@ def run_simulation(request: SimulationRequest):
 
         step_count += 1
 
-        # Stop when environment reaches the end
         if terminated or truncated:
             break
 
-    print(
-        "Simulation completed."
-    )
-
-    print(
-        "Total simulation steps:",
-        step_count
-    )
-
     # -----------------------------------------------------
-    # FINAL PORTFOLIO ALLOCATION
+    # FINAL ALLOCATION
     # -----------------------------------------------------
-
-    final_weights = environment.weights
 
     allocation = {
         asset: round(float(weight), 6)
         for asset, weight in zip(
             environment.assets,
-            final_weights
+            environment.weights,
         )
     }
 
-    print(
-        "Final allocation:",
-        allocation
+    # -----------------------------------------------------
+    # PERFORMANCE
+    # -----------------------------------------------------
+
+    final_portfolio_value = float(
+        environment.portfolio_value
     )
 
-    # -----------------------------------------------------
-    # PERFORMANCE METRICS
-    # -----------------------------------------------------
-
-    print("Calculating performance metrics...")
+    total_return = (
+        final_portfolio_value
+        / request.initial_balance
+        - 1.0
+    )
 
     sharpe_ratio = calculate_sharpe_ratio(
         portfolio_values
@@ -300,90 +252,78 @@ def run_simulation(request: SimulationRequest):
         portfolio_values
     )
 
-    print(
-        "Sharpe Ratio:",
-        sharpe_ratio
+    # -----------------------------------------------------
+    # ESTIMATED TAXES AND FEES
+    # -----------------------------------------------------
+
+    total_tax = sum(
+        float(item["tax_paid"])
+        for item in environment.history
     )
 
-    print(
-        "Maximum Drawdown:",
-        max_drawdown
+    total_fees = sum(
+        float(item["transaction_fee"])
+        for item in environment.history
     )
 
     # -----------------------------------------------------
-    # CALCULATE FINAL VALUES
-    # -----------------------------------------------------
-
-    final_portfolio_value = float(
-        environment.portfolio_value
-    )
-
-    total_return = (
-        final_portfolio_value
-        / float(request.initial_balance)
-        - 1
-    )
-
-    # Explicit conversion to Python float
-    total_return = float(total_return)
-
-    # -----------------------------------------------------
-    # FINAL RESPONSE
+    # API RESPONSE
     # -----------------------------------------------------
 
     result = {
+        "risk_profile": float(request.risk_profile),
 
-        "risk_profile": float(
-            request.risk_profile
-        ),
-
-        "initial_balance": float(
-            request.initial_balance
-        ),
+        "initial_balance": float(request.initial_balance),
 
         "final_portfolio_value": round(
-            final_portfolio_value,
-            2
+            final_portfolio_value, 2
         ),
 
         "total_return": round(
-            total_return,
-            6
+            float(total_return), 6
         ),
 
         "target_weights": allocation,
 
         "sharpe_ratio": round(
-            float(sharpe_ratio),
-            4
+            sharpe_ratio, 4
         ),
 
         "max_drawdown": round(
-            float(max_drawdown),
-            4
+            max_drawdown, 4
         ),
 
-        "steps": int(
-            step_count
-        ),
+        "steps": int(step_count),
 
         "portfolio_values": [
-            round(
-                float(value),
-                2
-            )
+            round(float(value), 2)
             for value in portfolio_values
         ],
 
         "rewards": [
-            round(
-                float(reward),
-                6
-            )
+            round(float(reward), 6)
             for reward in rewards
         ],
+
+        "estimated_tax_paid": round(
+            total_tax, 2
+        ),
+
+        "transaction_fees": round(
+            total_fees, 2
+        ),
+
+        "model_version": "PPO V2",
+
+        "evaluation_type": "Out-of-sample backtest",
     }
 
+    print("Final allocation:", allocation)
+    print("Final value:", final_portfolio_value)
+    print("Sharpe ratio:", sharpe_ratio)
+    print("Maximum drawdown:", max_drawdown)
+    print("Estimated tax:", total_tax)
+    print("Transaction fees:", total_fees)
     print("===== SIMULATION FINISHED =====\n")
 
     return result
@@ -394,41 +334,21 @@ def run_simulation(request: SimulationRequest):
 # ---------------------------------------------------------
 
 @app.post("/simulate")
-def simulate_portfolio(
-    request: SimulationRequest
-):
+def simulate_portfolio(request: SimulationRequest):
 
     try:
-
         return run_simulation(request)
 
     except Exception as error:
 
-        print(
-            "\n========== SIMULATION ERROR =========="
-        )
-
-        print(
-            "Error type:",
-            type(error).__name__
-        )
-
-        print(
-            "Error message:",
-            str(error)
-        )
-
-        print(
-            "\nFull traceback:"
-        )
+        print("\n========== SIMULATION ERROR ==========")
+        print("Error type:", type(error).__name__)
+        print("Error message:", str(error))
 
         traceback.print_exc()
 
-        print(
-            "======================================\n"
-        )
+        print("======================================\n")
 
-        # Re-raise the error so FastAPI returns 500
         raise
 
 
@@ -441,5 +361,6 @@ def root():
 
     return {
         "status": "ok",
-        "message": "Portfolio Optimizer API is running",
+        "message": "Portfolio Optimizer PPO V2 API is running",
+        "model_version": "PPO V2",
     }

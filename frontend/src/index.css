@@ -166,3 +166,85 @@ input[type='range'] { width: 100%; accent-color: var(--blue-600); height: 24px; 
   html { scroll-behavior: auto; }
   .spin { animation-duration: 3s; }
 }
+
+/* =============================================================
+   PRESENTATION REFRESH — scoped app shell, existing content preserved
+   ============================================================= */
+:root {
+  --bg: #f7f8fa;
+  --card: #ffffff;
+  --line: #e7eaf0;
+  --blue-600: #335fcb;
+  --blue-700: #284eaa;
+  --navy-900: #17243b;
+  --navy-800: #253a57;
+}
+body { background: var(--bg); color: #1b2738; }
+button, input, select { font-family: inherit; }
+button { -webkit-tap-highlight-color: transparent; }
+.app-layout { display: flex; min-height: 100vh; width: 100%; }
+.app-sidebar { width: 244px; flex: 0 0 244px; position: sticky; top: 0; height: 100vh; background: #fff; border-right: 1px solid var(--line); display: flex; flex-direction: column; padding: 24px 14px 18px; z-index: 40; }
+.app-sidebar__brand { display: flex; align-items: center; gap: 11px; padding: 2px 8px 30px; }
+.app-brand-mark { display: grid; place-items: center; width: 36px; height: 36px; flex: 0 0 36px; color: #fff; background: #335fcb; border-radius: 10px; }
+.app-sidebar__brand strong { display: block; font-size: 13.5px; line-height: 1.25; letter-spacing: -0.2px; color: #16243c; }
+.app-sidebar__brand span { display: block; margin-top: 3px; font-size: 11.5px; color: #8a95a7; }
+.app-sidebar__section-label { font-size: 10px; color: #8995a7; font-weight: 700; letter-spacing: 1.2px; padding: 7px 14px 12px; }
+.app-sidebar__nav { display: grid; gap: 5px; }
+.app-nav-item { width: 100%; display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 0; background: transparent; color: #566378; border-radius: 9px; font-size: 13px; font-weight: 600; text-align: left; cursor: pointer; transition: background .15s ease, color .15s ease; }
+.app-nav-item:hover { background: #f3f6fb; color: #263b5f; }
+.app-nav-item.is-active { background: #edf3ff; color: #2856b9; }
+.app-sidebar__bottom { margin-top: auto; border-top: 1px solid #edf0f4; padding: 16px 9px 2px; }
+.app-sidebar__info { display: flex; align-items: center; gap: 9px; font-size: 11.5px; color: #64748b; }
+.app-sidebar__version { color: #9aa4b3; font-size: 11px; margin-top: 13px; }
+.app-main-column { min-width: 0; flex: 1; }
+.app-topbar { background: #fff; height: 67px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; padding: 0 34px; gap: 14px; }
+.app-topbar__left, .app-topbar__right { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
+.app-breadcrumb { color: #8b96a7; font-size: 12px; }
+.app-breadcrumb-separator { color: #c9d0da; }
+.app-breadcrumb-current { color: #2d3c55; font-size: 12px; font-weight: 600; }
+.app-topbar__right { color: #64748b; font-size: 11.5px; }
+.app-status-dot { display: inline-block; background: #18a57e; width: 7px; height: 7px; border-radius: 50%; }
+.app-content { width: min(1310px, 100%); padding: 30px 36px 24px; margin: 0 auto; }
+.app-content .container { width: 100%; margin-inline: 0; }
+.app-page-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; margin-bottom: 22px; }
+.app-page-eyebrow { color: #7e8ca3; letter-spacing: 1.1px; font-size: 10px; font-weight: 700; margin-bottom: 6px; }
+.app-page-heading h1 { font-size: clamp(22px, 2.5vw, 28px); letter-spacing: -.75px; line-height: 1.3; color: #17243b; font-weight: 650; }
+.app-page-heading > div > p:last-child { color: #7b8797; font-size: 13px; margin-top: 6px; }
+.app-page-chip { flex: none; font-size: 11px; font-weight: 600; color: #526683; border: 1px solid #e2e7ee; background: #fff; border-radius: 50px; padding: 7px 11px; }
+.app-content .card { border: 1px solid #e6eaf0; border-radius: 12px; box-shadow: 0 1px 3px rgba(23,36,59,.025); }
+.app-content .metric { background: #fff; }
+.app-content .hero { background: transparent; padding-top: 0; }
+.app-content .hero__grid { gap: 18px; }
+.app-content .hero__text { color: #263750; background: #fff; border: 1px solid #e6eaf0; border-radius: 12px; padding: 24px; }
+.app-content .hero__text h1 { color: #182943; font-size: clamp(23px, 2.3vw, 30px); }
+.app-content .hero__text .hero__lead, .app-content .hero__text p:not(.hero__lead), .app-content .hero__text .hero__note { color: #6b7b91; }
+.app-content .hero__grid > * { min-width: 0; }
+.app-content .stack { padding-block: 18px 30px; }
+.app-footer { border-top: 1px solid var(--line); background: transparent; padding: 17px 20px; font-size: 11px; }
+.app-menu-toggle, .app-menu-close { display: none; border: 0; background: transparent; color: #475569; cursor: pointer; padding: 7px; }
+.app-mobile-overlay { display: none; }
+
+/* Portfolio onboarding: no changes to requests, state or form handlers */
+.portfolio-onboarding { padding-top: 0 !important; padding-bottom: 26px !important; }
+.portfolio-onboarding > .portfolio-onboarding__intro { display: none; }
+.portfolio-onboarding input:focus-visible, .portfolio-onboarding select:focus-visible { outline: 2px solid #9db9f7; outline-offset: 1px; }
+.portfolio-onboarding button:not(:disabled):hover { filter: brightness(.97); }
+.portfolio-onboarding .portfolio-panel { box-shadow: 0 1px 3px rgba(23,36,59,.025); }
+.portfolio-onboarding .portfolio-panel h2 { letter-spacing: -.2px; }
+
+@media (max-width: 1080px) { .app-sidebar { width: 213px; flex-basis: 213px; } .app-content { padding: 26px 23px; } .app-topbar { padding-inline: 23px; } }
+@media (max-width: 760px) {
+  .app-sidebar { position: fixed; top: 0; left: 0; bottom: 0; transform: translateX(-102%); transition: transform .2s ease; width: 255px; height: 100dvh; box-shadow: 8px 0 30px rgba(12,28,48,.08); }
+  .app-sidebar--open { transform: translateX(0); }
+  .app-mobile-overlay { display: block; position: fixed; z-index: 30; inset: 0; background: rgba(16,31,52,.25); border: 0; cursor: pointer; }
+  .app-menu-toggle, .app-menu-close { display: inline-flex; align-items: center; justify-content: center; }
+  .app-menu-close { margin-left: auto; }
+  .app-main-column { width: 100%; }
+  .app-topbar { height: 60px; padding-inline: 16px; }
+  .app-content { padding: 22px 16px; }
+  .app-page-heading { flex-wrap: wrap; }
+  .app-page-chip { font-size: 10px; }
+  .app-content .hero { background: transparent; }
+}
+@media (max-width: 440px) { .app-topbar__right { display: none; } .app-page-heading { gap: 12px; } }
+@media (prefers-reduced-motion: reduce) { .app-sidebar, .app-nav-item { transition: none; } }

@@ -9,6 +9,11 @@ Features:
 - Supports different investor risk profiles
 - Returns portfolio performance and allocation
 - Includes estimated taxes and transaction fees
+- Supports portfolio analysis and CSV/Excel uploads
+- Supports goal planning, rebalancing and stress testing
+- Supports personalized PPO optimization
+- Supports simple and technical explanations
+- Supports PPO sensitivity analysis through personalized.py
 """
 
 import sys
@@ -30,10 +35,36 @@ from stable_baselines3 import PPO
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-sys.path.insert(0, str(PROJECT_ROOT))
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+
+# ---------------------------------------------------------
+# PROJECT IMPORTS
+# ---------------------------------------------------------
 
 from RL.env_v2 import PortfolioEnvV2
 
+from app.backend.portfolio import (
+    router as portfolio_router,
+)
+
+from app.backend.portfolio_upload import (
+    router as upload_router,
+)
+
+from app.backend.portfolio_insights import (
+    router as insights_router,
+)
+
+from app.backend.personalized import (
+    create_personalized_router,
+)
+
+
+# ---------------------------------------------------------
+# MODEL AND DATA PATHS
+# ---------------------------------------------------------
 
 MODEL_PATH = (
     PROJECT_ROOT
@@ -51,6 +82,21 @@ DATA_PATH = (
 
 
 # ---------------------------------------------------------
+# VERIFY REQUIRED FILES
+# ---------------------------------------------------------
+
+if not MODEL_PATH.is_file():
+    raise FileNotFoundError(
+        f"PPO V2 model not found: {MODEL_PATH}"
+    )
+
+if not DATA_PATH.is_file():
+    raise FileNotFoundError(
+        f"Processed market data not found: {DATA_PATH}"
+    )
+
+
+# ---------------------------------------------------------
 # LOAD PPO V2 MODEL
 # ---------------------------------------------------------
 
@@ -58,7 +104,7 @@ print("Loading PPO V2 model...")
 
 model = PPO.load(
     str(MODEL_PATH),
-    device="cpu"
+    device="cpu",
 )
 
 print("PPO V2 model loaded successfully.")
@@ -68,12 +114,21 @@ print("PPO V2 model loaded successfully.")
 # LOAD MARKET DATA
 # ---------------------------------------------------------
 
-full_market_data = pd.read_parquet(DATA_PATH).sort_index()
+full_market_data = (
+    pd.read_parquet(DATA_PATH)
+    .sort_index()
+)
+
+if len(full_market_data) < 3:
+    raise ValueError(
+        "Market dataset must contain at least 3 rows."
+    )
 
 train_size = int(len(full_market_data) * 0.8)
 
 market_data = (
-    full_market_data.iloc[train_size:]
+    full_market_data
+    .iloc[train_size:]
     .copy()
 )
 
@@ -87,9 +142,18 @@ print("Reserved test rows:", len(market_data))
 
 app = FastAPI(
     title="Portfolio Optimizer API",
-    description="AI-powered tax-aware portfolio optimization",
-    version="2.1.0",
+    description=(
+        "PPO V2 portfolio optimization with historical "
+        "backtesting, portfolio insights, explainability "
+        "and model sensitivity analysis."
+    ),
+    version="2.2.0",
 )
+
+
+# ---------------------------------------------------------
+# CORS CONFIGURATION
+# ---------------------------------------------------------
 
 app.add_middleware(
     CORSMiddleware,
@@ -97,13 +161,44 @@ app.add_middleware(
         "http://localhost:5173",
         "http://127.0.0.1:5173",
     ],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
 # ---------------------------------------------------------
-# REQUEST MODEL
+# REGISTER API ROUTERS
+# ---------------------------------------------------------
+
+# POST /portfolio/analyze
+app.include_router(
+    portfolio_router
+)
+
+# POST /portfolio/upload
+app.include_router(
+    upload_router
+)
+
+# POST /portfolio/insights
+app.include_router(
+    insights_router
+)
+
+# POST /portfolio/optimize
+# Includes explainability and sensitivity analysis
+# when implemented in personalized.py.
+app.include_router(
+    create_personalized_router(
+        model=model,
+        market_data=full_market_data,
+    )
+)
+
+
+# ---------------------------------------------------------
+# SIMULATION REQUEST MODEL
 # ---------------------------------------------------------
 
 class SimulationRequest(BaseModel):
@@ -126,12 +221,29 @@ class SimulationRequest(BaseModel):
 
 def calculate_sharpe_ratio(portfolio_values):
 
-    values = np.asarray(portfolio_values, dtype=float)
+    values = np.asarray(
+        portfolio_values,
+        dtype=float,
+    )
 
     if len(values) < 2:
         return 0.0
 
-    returns = np.diff(values) / values[:-1]
+    if not np.isfinite(values).all():
+        raise ValueError(
+            "Portfolio values contain non-finite numbers."
+        )
+
+    if np.any(values[:-1] <= 0):
+        raise ValueError(
+            "Portfolio values must be positive "
+            "when calculating returns."
+        )
+
+    returns = (
+        np.diff(values)
+        / values[:-1]
+    )
 
     volatility = np.std(returns)
 
@@ -143,7 +255,9 @@ def calculate_sharpe_ratio(portfolio_values):
     risk_free_daily = 0.05 / 252
 
     sharpe = (
-        np.mean(returns - risk_free_daily)
+        np.mean(
+            returns - risk_free_daily
+        )
         / volatility
         * np.sqrt(252)
     )
@@ -153,29 +267,53 @@ def calculate_sharpe_ratio(portfolio_values):
 
 def calculate_max_drawdown(portfolio_values):
 
-    values = np.asarray(portfolio_values, dtype=float)
+    values = np.asarray(
+        portfolio_values,
+        dtype=float,
+    )
 
     if len(values) < 2:
         return 0.0
 
-    peaks = np.maximum.accumulate(values)
+    if not np.isfinite(values).all():
+        raise ValueError(
+            "Portfolio values contain non-finite numbers."
+        )
 
-    drawdowns = values / peaks - 1.0
+    peaks = np.maximum.accumulate(
+        values
+    )
 
-    return float(np.min(drawdowns))
+    drawdowns = (
+        values / peaks - 1.0
+    )
+
+    return float(
+        np.min(drawdowns)
+    )
 
 
 # ---------------------------------------------------------
-# SIMULATION
+# RUN HISTORICAL SIMULATION
 # ---------------------------------------------------------
 
 def run_simulation(request: SimulationRequest):
 
-    print("\n===== PPO V2 SIMULATION STARTED =====")
+    print(
+        "\n===== PPO V2 SIMULATION STARTED ====="
+    )
 
-    print("Risk profile:", request.risk_profile)
-    print("Initial balance:", request.initial_balance)
+    print(
+        "Risk profile:",
+        request.risk_profile,
+    )
 
+    print(
+        "Initial balance:",
+        request.initial_balance,
+    )
+
+    # Use reserved out-of-sample test data.
     environment = PortfolioEnvV2(
         df=market_data.copy(),
         risk_profile=request.risk_profile,
@@ -207,7 +345,9 @@ def run_simulation(request: SimulationRequest):
             _,
         ) = environment.step(action)
 
-        rewards.append(float(reward))
+        rewards.append(
+            float(reward)
+        )
 
         portfolio_values.append(
             float(environment.portfolio_value)
@@ -223,7 +363,10 @@ def run_simulation(request: SimulationRequest):
     # -----------------------------------------------------
 
     allocation = {
-        asset: round(float(weight), 6)
+        asset: round(
+            float(weight),
+            6,
+        )
         for asset, weight in zip(
             environment.assets,
             environment.weights,
@@ -271,29 +414,39 @@ def run_simulation(request: SimulationRequest):
     # -----------------------------------------------------
 
     result = {
-        "risk_profile": float(request.risk_profile),
+        "risk_profile": float(
+            request.risk_profile
+        ),
 
-        "initial_balance": float(request.initial_balance),
+        "initial_balance": float(
+            request.initial_balance
+        ),
 
         "final_portfolio_value": round(
-            final_portfolio_value, 2
+            final_portfolio_value,
+            2,
         ),
 
         "total_return": round(
-            float(total_return), 6
+            float(total_return),
+            6,
         ),
 
         "target_weights": allocation,
 
         "sharpe_ratio": round(
-            sharpe_ratio, 4
+            sharpe_ratio,
+            4,
         ),
 
         "max_drawdown": round(
-            max_drawdown, 4
+            max_drawdown,
+            4,
         ),
 
-        "steps": int(step_count),
+        "steps": int(
+            step_count
+        ),
 
         "portfolio_values": [
             round(float(value), 2)
@@ -306,25 +459,55 @@ def run_simulation(request: SimulationRequest):
         ],
 
         "estimated_tax_paid": round(
-            total_tax, 2
+            total_tax,
+            2,
         ),
 
         "transaction_fees": round(
-            total_fees, 2
+            total_fees,
+            2,
         ),
 
         "model_version": "PPO V2",
 
-        "evaluation_type": "Out-of-sample backtest",
+        "evaluation_type": (
+            "Out-of-sample backtest"
+        ),
     }
 
-    print("Final allocation:", allocation)
-    print("Final value:", final_portfolio_value)
-    print("Sharpe ratio:", sharpe_ratio)
-    print("Maximum drawdown:", max_drawdown)
-    print("Estimated tax:", total_tax)
-    print("Transaction fees:", total_fees)
-    print("===== SIMULATION FINISHED =====\n")
+    print(
+        "Final allocation:",
+        allocation,
+    )
+
+    print(
+        "Final value:",
+        final_portfolio_value,
+    )
+
+    print(
+        "Sharpe ratio:",
+        sharpe_ratio,
+    )
+
+    print(
+        "Maximum drawdown:",
+        max_drawdown,
+    )
+
+    print(
+        "Estimated tax:",
+        total_tax,
+    )
+
+    print(
+        "Transaction fees:",
+        total_fees,
+    )
+
+    print(
+        "===== SIMULATION FINISHED =====\n"
+    )
 
     return result
 
@@ -334,20 +517,36 @@ def run_simulation(request: SimulationRequest):
 # ---------------------------------------------------------
 
 @app.post("/simulate")
-def simulate_portfolio(request: SimulationRequest):
+def simulate_portfolio(
+    request: SimulationRequest,
+):
 
     try:
-        return run_simulation(request)
+        return run_simulation(
+            request
+        )
 
     except Exception as error:
 
-        print("\n========== SIMULATION ERROR ==========")
-        print("Error type:", type(error).__name__)
-        print("Error message:", str(error))
+        print(
+            "\n========== SIMULATION ERROR =========="
+        )
+
+        print(
+            "Error type:",
+            type(error).__name__,
+        )
+
+        print(
+            "Error message:",
+            str(error),
+        )
 
         traceback.print_exc()
 
-        print("======================================\n")
+        print(
+            "======================================\n"
+        )
 
         raise
 
@@ -361,6 +560,19 @@ def root():
 
     return {
         "status": "ok",
-        "message": "Portfolio Optimizer PPO V2 API is running",
+        "message": (
+            "Portfolio Optimizer PPO V2 API is running"
+        ),
         "model_version": "PPO V2",
+        "api_version": "2.2.0",
+        "features": [
+            "historical_simulation",
+            "portfolio_analysis",
+            "portfolio_upload",
+            "portfolio_insights",
+            "personalized_optimization",
+            "simple_explanations",
+            "technical_explanations",
+            "model_sensitivity",
+        ],
     }
